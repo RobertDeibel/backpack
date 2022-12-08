@@ -41,10 +41,11 @@ class weight_jac_t_save_memory:
 
     def __init__(self, save_memory=True):
         warn(
-            "weight_jac_t_save_memory is deprecated and will be removed in the future.\n",
-            "Use weight_jac_t_method instead:\n",
-            "weight_jac_t_save_memory(True) → weight_jac_t_method('higher')\n",
-            "weight_jac_t_save_memory(False) → weight_jac_t_method('same')",
+            "weight_jac_t_save_memory is deprecated and will be removed in the future.\n"
+            + "Use weight_jac_t_method instead:\n"
+            + "weight_jac_t_save_memory(True) → weight_jac_t_method('higher')\n"
+            + "weight_jac_t_save_memory(False) → weight_jac_t_method('same')",
+            DeprecationWarning,
         )
         save_memory_to_method = {True: "higher", False: "same"}
         self._ctx = weight_jac_t_method(method=save_memory_to_method[save_memory])
@@ -161,8 +162,8 @@ class ConvNDDerivatives(BaseParameterDerivatives):
             weight_jac_t_func = self.__higher_conv_weight_jac_t
         elif method == "higher" and self._conv_dims == 3:
             warn(
-                "Conv3d: Cannot save memory as there is no Conv4d.",
-                " Fallback to more memory-intense method.",
+                "Conv3d: Cannot save memory as there is no Conv4d."
+                + " Fallback to more memory-intense method."
             )
             weight_jac_t_func = self.__same_conv_weight_jac_t
         elif method == "same":
