@@ -13,22 +13,47 @@ from backpack.utils.conv_transpose import get_conv_transpose_function
 from backpack.utils.subsampling import subsample
 
 
-class weight_jac_t_save_memory:
+class weight_jac_t_method:
     """Choose algorithm to apply transposed convolution weight Jacobian."""
 
-    _SAVE_MEMORY = False
+    _METHOD = "same"
+    _SUPPORTED = ["same", "higher"]
 
-    def __init__(self, save_memory=True):
-        self._new_save_memory = save_memory
+    def __init__(self, method: str = "same"):
+        if method not in self._SUPPORTED:
+            raise ValueError(
+                f"Unsupported method: {method}. Supported: {self._SUPPORTED}."
+            )
+        self._new_method = method
 
     def __enter__(self):
         """Store current value, set new value."""
-        self._old_save_memory = weight_jac_t_save_memory._SAVE_MEMORY
-        weight_jac_t_save_memory._SAVE_MEMORY = self._new_save_memory
+        self._old_method = weight_jac_t_method._METHOD
+        weight_jac_t_method._METHOD = self._new_method
 
     def __exit__(self, type, value, traceback):
         """Restore original value."""
-        weight_jac_t_save_memory._SAVE_MEMORY = self._old_save_memory
+        weight_jac_t_method._METHOD = self._old_method
+
+
+class weight_jac_t_save_memory:
+    """Choose algorithm to apply transposed convolution weight Jacobian."""
+
+    def __init__(self, save_memory=True):
+        warn(
+            "weight_jac_t_save_memory is deprecated and will be removed in the future.\n",
+            "Use weight_jac_t_method instead:\n",
+            "weight_jac_t_save_memory(True) → weight_jac_t_method('higher')\n",
+            "weight_jac_t_save_memory(False) → weight_jac_t_method('same')",
+        )
+        save_memory_to_method = {True: "higher", False: "same"}
+        self._ctx = weight_jac_t_method(method=save_memory_to_method[save_memory])
+
+    def __enter__(self):
+        return self._ctx.__enter__()
+
+    def __exit__(self, type, value, traceback):
+        return self._ctx.__exit__(type, value, traceback)
 
 
 class ConvNDDerivatives(BaseParameterDerivatives):
@@ -130,17 +155,20 @@ class ConvNDDerivatives(BaseParameterDerivatives):
         sum_batch: bool = True,
         subsampling: List[int] = None,
     ) -> Tensor:
-        save_memory = weight_jac_t_save_memory._SAVE_MEMORY
+        method = weight_jac_t_method._METHOD
 
-        if save_memory and self.conv_dims in [1, 2]:
+        if method == "higher" and self.conv_dims in [1, 2]:
             weight_jac_t_func = self.__higher_conv_weight_jac_t
-        else:
-            if save_memory and self.conv_dims == 3:
-                warn(
-                    "Conv3d: Cannot save memory as there is no Conv4d."
-                    + " Fallback to more memory-intense method."
-                )
+        elif method == "higher" and self._conv_dims == 3:
+            warn(
+                "Conv3d: Cannot save memory as there is no Conv4d.",
+                " Fallback to more memory-intense method.",
+            )
             weight_jac_t_func = self.__same_conv_weight_jac_t
+        elif method == "same":
+            weight_jac_t_func = self.__same_conv_weight_jac_t
+        else:
+            raise ValueError(f"No approach defined for method {method}.")
 
         return weight_jac_t_func(module, mat, sum_batch, subsampling=subsampling)
 
