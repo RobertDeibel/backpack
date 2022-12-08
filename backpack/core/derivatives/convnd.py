@@ -160,7 +160,7 @@ class ConvNDDerivatives(BaseParameterDerivatives):
 
         if method == "higher" and self.conv_dims in [1, 2]:
             weight_jac_t_func = self.__higher_conv_weight_jac_t
-        elif method == "higher" and self._conv_dims == 3:
+        elif method == "higher" and self.conv_dims == 3:
             warn(
                 "Conv3d: Cannot save memory as there is no Conv4d."
                 + " Fallback to more memory-intense method."
