@@ -2,6 +2,7 @@ from typing import List, Tuple, Union
 from warnings import warn
 
 from einops import rearrange, reduce
+from functorch import vjp, vmap
 from numpy import prod
 from torch import Tensor, einsum
 from torch.nn import Conv1d, Conv2d, Conv3d, Module
@@ -17,7 +18,7 @@ class weight_jac_t_method:
     """Choose algorithm to apply transposed convolution weight Jacobian."""
 
     _METHOD = "same"
-    _SUPPORTED = ["same", "higher"]
+    _SUPPORTED = ["same", "higher", "functorch"]
 
     def __init__(self, method: str = "same"):
         if method not in self._SUPPORTED:
@@ -168,10 +169,57 @@ class ConvNDDerivatives(BaseParameterDerivatives):
             weight_jac_t_func = self.__same_conv_weight_jac_t
         elif method == "same":
             weight_jac_t_func = self.__same_conv_weight_jac_t
+        elif method == "functorch":
+            weight_jac_t_func = self.__functorch_weight_jac_t
         else:
             raise ValueError(f"No approach defined for method {method}.")
 
         return weight_jac_t_func(module, mat, sum_batch, subsampling=subsampling)
+
+    def __functorch_weight_jac_t(
+        self,
+        module: Union[Conv1d, Conv2d, Conv3d],
+        mat: Tensor,
+        sum_batch: bool,
+        subsampling: List[int] = None,
+    ) -> Tensor:
+        """Uses functorch."""
+        conv_fn = get_conv_function(self.conv_dims)
+        subsampled_input = subsample(module.input0, subsampling=subsampling)
+
+        if sum_batch:
+            fn = lambda w: conv_fn(
+                subsampled_input,
+                w,
+                None,
+                stride=module.stride,
+                padding=module.padding,
+                dilation=module.dilation,
+                groups=module.groups,
+            )
+            _, vjp_fn = vjp(fn, module.weight)
+        else:
+            fn = lambda x, w: conv_fn(
+                x,
+                w,
+                None,
+                stride=module.stride,
+                padding=module.padding,
+                dilation=module.dilation,
+                groups=module.groups,
+            )
+            batched_fn_fix_input = lambda w_batched: vmap(fn)(
+                subsampled_input, w_batched
+            )
+
+            N = subsampled_input.shape[0]
+            w_batched = module.weight.unsqueeze(0).expand(N, *module.weight.shape)
+            # NOTE: This performs a forward pass
+            _, vjp_fn = vjp(batched_fn_fix_input, w_batched)
+
+        mjp_fn = vmap(vjp_fn)
+
+        return mjp_fn(mat)[0]
 
     def __same_conv_weight_jac_t(
         self,

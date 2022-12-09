@@ -34,7 +34,10 @@ from warnings import warn
 from pytest import fixture, mark, raises, skip
 from torch import Tensor, rand
 
-from backpack.core.derivatives.convnd import weight_jac_t_save_memory
+from backpack.core.derivatives.convnd import (
+    weight_jac_t_method,
+    weight_jac_t_save_memory,
+)
 from backpack.utils.subsampling import subsample
 
 PROBLEMS = make_test_problems(SETTINGS)
@@ -101,6 +104,7 @@ def test_param_mjp(
     """
     skip_subsampling_conflict(problem, subsampling)
     test_save_memory: bool = "Conv" in request.node.callspec.id
+    test_conv_weight_jac_t_method: bool = test_save_memory
     V = 3
 
     for param_str, _ in problem.module.named_parameters():
@@ -113,6 +117,25 @@ def test_param_mjp(
             with weight_jac_t_save_memory(
                 save_memory=save_memory
             ) if test_save_memory else nullcontext():
+                backpack_res = BackpackDerivatives(problem).param_mjp(
+                    param_str, mat, sum_batch, subsampling=subsampling
+                )
+            autograd_res = AutogradDerivatives(problem).param_mjp(
+                param_str, mat, sum_batch, subsampling=subsampling
+            )
+
+            check_sizes_and_values(autograd_res, backpack_res)
+
+        for method in (
+            ["same", "higher", "functorch"] if test_conv_weight_jac_t_method else [None]
+        ):
+            if test_conv_weight_jac_t_method:
+                print(f"testing with weight_jac_t_method={method}")
+
+            mat = rand_mat_like_output(V, problem, subsampling=subsampling)
+            with weight_jac_t_method(
+                method=method
+            ) if test_conv_weight_jac_t_method else nullcontext():
                 backpack_res = BackpackDerivatives(problem).param_mjp(
                     param_str, mat, sum_batch, subsampling=subsampling
                 )
