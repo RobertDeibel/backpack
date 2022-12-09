@@ -127,7 +127,9 @@ def test_param_mjp(
             check_sizes_and_values(autograd_res, backpack_res)
 
         for method in (
-            ["same", "higher", "functorch"] if test_conv_weight_jac_t_method else [None]
+            ["same", "higher", "functorch", "higher+functorch"]
+            if test_conv_weight_jac_t_method
+            else [None]
         ):
             if test_conv_weight_jac_t_method:
                 print(f"testing with weight_jac_t_method={method}")

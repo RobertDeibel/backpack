@@ -17,8 +17,8 @@ from backpack.utils.subsampling import subsample
 class weight_jac_t_method:
     """Choose algorithm to apply transposed convolution weight Jacobian."""
 
-    _METHOD = "functorch"
-    _SUPPORTED = ["same", "higher", "functorch"]
+    _METHOD = "higher+functorch"
+    _SUPPORTED = ["same", "higher", "functorch", "higher+functorch"]
 
     def __init__(self, method: str = "same"):
         if method not in self._SUPPORTED:
@@ -161,12 +161,14 @@ class ConvNDDerivatives(BaseParameterDerivatives):
 
         if method == "higher" and self.conv_dims in [1, 2]:
             weight_jac_t_func = self.__higher_conv_weight_jac_t
-        elif method == "higher" and self.conv_dims == 3:
+        elif method in ["higher", "higher+functorch"] and self.conv_dims == 3:
             warn(
                 "Conv3d: Cannot save memory as there is no Conv4d."
                 + " Fallback to more memory-intense method."
             )
             weight_jac_t_func = self.__same_conv_weight_jac_t
+        elif method == "higher+functorch":
+            weight_jac_t_func = self.__higher_functorch_conv_weight_jac_t
         elif method == "same":
             weight_jac_t_func = self.__same_conv_weight_jac_t
         elif method == "functorch":
@@ -334,6 +336,69 @@ class ConvNDDerivatives(BaseParameterDerivatives):
             weight_grad = weight_grad.sum(1)
 
         return weight_grad
+
+    def __higher_functorch_conv_weight_jac_t(
+        self,
+        module: Union[Conv1d, Conv2d, Conv3d],
+        mat: Tensor,
+        sum_batch: bool,
+        subsampling: List[int] = None,
+    ) -> Tensor:
+        """Requires higher-order convolution and functorch.
+
+        The algorithm is proposed in:
+
+            - Rochette, G., Manoel, A., & Tramel, E. W., Efficient per-example
+              gradient computations in convolutional neural networks (2019).
+        """
+        G = module.groups
+        C_out = module.output.shape[1]
+        subsampled_input = subsample(module.input0, subsampling=subsampling)
+        N = subsampled_input.shape[0]
+        C_in = subsampled_input.shape[1]
+
+        higher_conv_func = get_conv_function(self.conv_dims + 1)
+
+        spatial_dim = (C_in // G,) + subsampled_input.shape[2:]
+        spatial_dim_new = (C_in // G,) + module.weight.shape[2:]
+
+        def vjp_fn(v: Tensor) -> Tensor:
+            # Reshape to extract groups from the convolutional layer
+            # Channels are seen as an extra spatial dimension with kernel size 1
+            input_conv = subsampled_input.reshape(1, N * G, *spatial_dim)
+            # Compute convolution between input and output; the batchsize is seen
+            # as channels, taking advantage of the `groups` argument
+            v_conv = rearrange(v, "n c ... -> (n c) ...").unsqueeze(1).unsqueeze(2)
+
+            stride = (1, *module.stride)
+            dilation = (1, *module.dilation)
+            padding = (0, *module.padding)
+
+            conv = higher_conv_func(
+                input_conv,
+                v_conv,
+                groups=N * G,
+                stride=dilation,
+                dilation=stride,
+                padding=padding,
+            ).squeeze(0)
+
+            # Because of rounding shapes when using non-default stride or dilation,
+            # convolution result must be truncated to convolution kernel size
+            for axis in range(2, 2 + self.conv_dims):
+                conv = conv.narrow(axis, 0, module.weight.shape[axis])
+
+            new_shape = [N, C_out, *spatial_dim_new]
+            weight_grad = conv.reshape(*new_shape)
+
+            if sum_batch:
+                weight_grad = weight_grad.sum(0)
+
+            return weight_grad
+
+        mjp_fn = vmap(vjp_fn)
+
+        return mjp_fn(mat)
 
     def ea_jac_t_mat_jac_prod(self, module, g_inp, g_out, mat):
         in_features = int(prod(module.input0.size()[1:]))
