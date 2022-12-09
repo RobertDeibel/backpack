@@ -17,7 +17,7 @@ from backpack.utils.subsampling import subsample
 class weight_jac_t_method:
     """Choose algorithm to apply transposed convolution weight Jacobian."""
 
-    _METHOD = "higher"
+    _METHOD = "functorch"
     _SUPPORTED = ["same", "higher", "functorch"]
 
     def __init__(self, method: str = "same"):
